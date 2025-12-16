@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1.0,user-scalable=no" />
+<title>Right Hand Phone Hold – Button Control</title>
+<style>
+  html,body{margin:0;padding:0;width:100%;height:100%;background:#000;overflow:hidden;}
+  #ui{
+    position:fixed;left:0;right:0;bottom:0;
+    display:flex;gap:10px;justify-content:center;align-items:center;
+    padding:12px;
+    background:rgba(0,0,0,0.55);
+    backdrop-filter: blur(4px);
+    z-index:10;
+  }
+  button{
+    padding:10px 14px;
+    border-radius:12px;
+    border:1px solid rgba(255,255,255,0.18);
+    background:rgba(255,255,255,0.08);
+    color:#eee;
+    font-size:14px;
+  }
+  button:active{transform:scale(0.98);}
+  #badge{
+    position:fixed;top:18px;left:50%;transform:translateX(-50%);
+    color:#aaa;font-family:sans-serif;font-size:14px;letter-spacing:0.08em;
+    z-index:10;
+  }
+  svg{width:100vw;height:100vh;display:block;}
+  .handFill{fill:rgba(255,255,0,0.25);stroke:none;}
+  .fingerLine,.thumbLine{stroke:#ff0;stroke-width:6;stroke-linecap:round;fill:none;}
+  .nail{fill:#ff0;}
+  .phone{fill:#1e6cff;rx:16;ry:16;opacity:0;}
+</style>
+</head>
+
+<body>
+<div id="badge">RELAX</div>
+
+<div id="ui">
+  <button id="bRelax">RELAX</button>
+  <button id="bHold">HOLD</button>
+  <button id="bLock">LOCK</button>
+  <button id="bMini">MINI-OPEN</button>
+  <button id="bAuto">AUTO: OFF</button>
+</div>
+
+<svg viewBox="0 0 400 700" aria-label="Right hand phone hold demo">
+
+  <!-- Phone: wrist-parallel, fixed (never rotates/moves). -->
+  <rect id="phone" class="phone" x="160" y="255" width="80" height="135"></rect>
+
+  <!-- Wrist + Palm: no boundary lines, same fill. Wrist does NOT rotate. -->
+  <g id="staticMass">
+    <!-- Palm: U-like -->
+    <path class="handFill"
+      d="M125 245
+         Q200 200 275 245
+         L275 365
+         Q200 400 125 365
+         Z"/>
+    <!-- Wrist: inverted U-like -->
+    <path class="handFill"
+      d="M155 365
+         Q200 410 245 365
+         L245 455
+         Q200 480 155 455
+         Z"/>
+  </g>
+
+  <!-- Rotating part = palm + four fingers only (conceptually: hand dorsum rotates, wrist fixed). -->
+  <!-- We keep the fill mass static to avoid overlap artifacts; the "rotation" is expressed through fingers movement. -->
+  <g id="fingersGroup">
+    <!-- 4 fingers (index..little) -->
+    <line id="index"  class="fingerLine"/>
+    <line id="middle" class="fingerLine"/>
+    <line id="ring"   class="fingerLine"/>
+    <line id="little" class="fingerLine"/>
+
+    <!-- Thumb: independent (NOT part of fingersGroup transform) -->
+  </g>
+
+  <!-- Thumb group separate: independent reverse-kink wrap -->
+  <g id="thumbGroup">
+    <line id="thumbA" class="thumbLine"/>
+    <line id="thumbB" class="thumbLine"/>
+  </g>
+
+  <!-- Nails: shown only in RELAX -->
+  <g id="nails">
+    <polygon id="n_index"  class="nail"></polygon>
+    <polygon id="n_middle" class="nail"></polygon>
+    <polygon id="n_ring"   class="nail"></polygon>
+    <polygon id="n_little" class="nail"></polygon>
+    <polygon id="n_thumb"  class="nail"></polygon>
+  </g>
+
+</svg>
+
+<script>
+(() => {
+  const badge = document.getElementById('badge');
+  const phone = document.getElementById('phone');
+
+  // ====== Geometry ======
+  // Base joint line (MCP line-ish) for RELAX.
+  const baseY = 245;
+
+  // Right hand dorsal view:
+  // Thumb on the RIGHT side visually in this drawing (you can mirror later).
+  // Index longest, little shortest.
+  const F = {
+    index:  { x: 210, relax: 95, hold: 52, lock: 42, mini: 50, aHold: -38, aLock: -50, aMini: -42 },
+    middle: { x: 190, relax: 86, hold: 50, lock: 44, mini: 48, aHold: -30, aLock: -42, aMini: -35 },
+    ring:   { x: 170, relax: 76, hold: 46, lock: 40, mini: 44, aHold: -18, aLock: -28, aMini: -22 },
+    little: { x: 150, relax: 66, hold: 42, lock: 38, mini: 40, aHold:  -8, aLock: -16, aMini: -10 },
+  };
+
+  // Thumb: reverse-kink (two segments). It must wrap the phone and appear parallel-ish to wrist.
+  const Thumb = {
+    base: { x: 265, y: 305 },
+    RELAX: { mid:{x:255,y:280}, tip:{x:240,y:255} },
+    HOLD:  { mid:{x:248,y:312}, tip:{x:232,y:320} }, // starts wrapping
+    LOCK:  { mid:{x:252,y:330}, tip:{x:240,y:350} }, // tight wrap
+    MINI:  { mid:{x:250,y:320}, tip:{x:236,y:336} }, // slightly loosen, still wrap
+  };
+
+  // Pivot for the 4-finger "90° left rotation" effect.
+  // We apply rotation to the 4 fingers group to create the "hand turns left" feel.
+  const pivot = { x: 200, y: 330 };
+
+  const rotByState = {
+    RELAX: 0,
+    HOLD: -90,
+    LOCK: -90,
+    MINI: -90,
+  };
+
+  // ====== Helpers ======
+  const deg2rad = d => d * Math.PI / 180;
+
+  function setLine(id, x1,y1, x2,y2){
+    const el = document.getElementById(id);
+    el.setAttribute('x1', x1);
+    el.setAttribute('y1', y1);
+    el.setAttribute('x2', x2);
+    el.setAttribute('y2', y2);
+    return {x:x2,y:y2};
+  }
+
+  // Draw finger with length + angle (angle is in local coordinates BEFORE group rotation)
+  function drawFinger(name, len, angleDeg){
+    const f = F[name];
+    const rad = deg2rad(angleDeg);
+    const x1 = f.x, y1 = baseY;
+    const x2 = x1 + Math.sin(rad) * len;
+    const y2 = y1 - Math.cos(rad) * len;
+    return setLine(name, x1,y1, x2,y2);
+  }
+
+  function setNail(id, x, y){
+    // small triangle; point direction up
+    const s = 7;
+    document.getElementById(id).setAttribute('points', `${x},${y} ${x-s},${y-12} ${x+s},${y-12}`);
+  }
+
+  function clearNails(){
+    ['index','middle','ring','little','thumb'].forEach(k=>{
+      document.getElementById('n_'+k).setAttribute('points','');
+    });
+  }
+
+  function drawThumb(stateKey){
+    const p = Thumb[stateKey];
+    // Always keep thumb lines fully specified (prevents "mystery diagonal line")
+    setLine('thumbA', Thumb.base.x, Thumb.base.y, p.mid.x, p.mid.y);
+    setLine('thumbB', p.mid.x, p.mid.y, p.tip.x, p.tip.y);
+    if(stateKey === 'RELAX'){
+      setNail('n_thumb', p.tip.x, p.tip.y);
+    }
+  }
+
+  // Smooth tween helper
+  function tween(durationMs, onUpdate, onDone){
+    const t0 = performance.now();
+    function step(t){
+      const u = Math.min(1, (t - t0) / durationMs);
+      // ease in-out
+      const e = u < 0.5 ? 2*u*u : 1 - Math.pow(-2*u + 2, 2)/2;
+      onUpdate(e);
+      if(u < 1) requestAnimationFrame(step);
+      else onDone && onDone();
+    }
+    requestAnimationFrame(step);
+  }
+
+  // ====== State Application (with interpolation) ======
+  let current = 'RELAX';
+  let auto = false;
+  let autoTimer = null;
+
+  function applyInstant(stateKey){
+    current = stateKey;
+    badge.textContent = stateKey;
+
+    // phone visibility rule
+    phone.style.opacity = (stateKey === 'RELAX') ? 0 : 1;
+
+    // nails rule
+    if(stateKey === 'RELAX'){
+      // fingers straight, nails on
+      const pI = drawFinger('index',  F.index.relax,  0);
+      const pM = drawFinger('middle', F.middle.relax, 0);
+      const pR = drawFinger('ring',   F.ring.relax,   0);
+      const pL = drawFinger('little', F.little.relax, 0);
+      setNail('n_index',  pI.x, pI.y);
+      setNail('n_middle', pM.x, pM.y);
+      setNail('n_ring',   pR.x, pR.y);
+      setNail('n_little', pL.x, pL.y);
+      drawThumb('RELAX');
+    } else {
+      clearNails();
+      // angles + lengths differ per state
+      const map = (k) => {
+        const f = F[k];
+        if(stateKey === 'HOLD') return {len:f.hold, ang:f.aHold};
+        if(stateKey === 'LOCK') return {len:f.lock, ang:f.aLock};
+        if(stateKey === 'MINI') return {len:f.mini, ang:f.aMini};
+      };
+      ['index','middle','ring','little'].forEach(k=>{
+        const {len,ang} = map(k);
+        drawFinger(k, len, ang);
+      });
+      drawThumb(stateKey);
+    }
+
+    // group rotation (90° left) for non-thumb fingers
+    const rot = rotByState[stateKey];
+    document.getElementById('fingersGroup')
+      .setAttribute('transform', `rotate(${rot} ${pivot.x} ${pivot.y})`);
+  }
+
+  // Interpolated transition between two states (for VR/認知の滑らかさ)
+  function transitionTo(nextKey){
+    const fromKey = current;
+    const toKey = nextKey;
+    badge.textContent = toKey;
+
+    // determine target parameters per finger
+    function paramsFor(key, fingerName){
+      const f = F[fingerName];
+      if(key === 'RELAX') return {len:f.relax, ang:0};
+      if(key === 'HOLD')  return {len:f.hold,  ang:f.aHold};
+      if(key === 'LOCK')  return {len:f.lock,  ang:f.aLock};
+      if(key === 'MINI')  return {len:f.mini,  ang:f.aMini};
+    }
+
+    const rotFrom = rotByState[fromKey];
+    const rotTo   = rotByState[toKey];
+
+    // phone opacity (snap at start/end is OK; we do short fade)
+    const opFrom = (fromKey === 'RELAX') ? 0 : 1;
+    const opTo   = (toKey   === 'RELAX') ? 0 : 1;
+
+    // nails: show only in RELAX; we fade by clearing at start if leaving RELAX, and re-add at end if arriving RELAX
+    if(fromKey === 'RELAX' && toKey !== 'RELAX') clearNails();
+
+    tween(420, (e)=>{
+      // fingers
+      ['index','middle','ring','little'].forEach(k=>{
+        const a = paramsFor(fromKey,k);
+        const b = paramsFor(toKey,k);
+        const len = a.len + (b.len - a.len)*e;
+        const ang = a.ang + (b.ang - a.ang)*e;
+        drawFinger(k, len, ang);
+      });
+
+      // thumb: interpolate mid/tip points (prevents diagonal ghosts)
+      const A = Thumb[fromKey] || Thumb.RELAX;
+      const B = Thumb[toKey]   || Thumb.RELAX;
+      const midX = A.mid.x + (B.mid.x - A.mid.x)*e;
+      const midY = A.mid.y + (B.mid.y - A.mid.y)*e;
+      const tipX = A.tip.x + (B.tip.x - A.tip.x)*e;
+      const tipY = A.tip.y + (B.tip.y - A.tip.y)*e;
+
+      setLine('thumbA', Thumb.base.x, Thumb.base.y, midX, midY);
+      setLine('thumbB', midX, midY, tipX, tipY);
+
+      // rotation
+      const rot = rotFrom + (rotTo - rotFrom)*e;
+      document.getElementById('fingersGroup')
+        .setAttribute('transform', `rotate(${rot} ${pivot.x} ${pivot.y})`);
+
+      // phone fade
+      const op = opFrom + (opTo - opFrom)*e;
+      phone.style.opacity = String(op);
+    }, ()=>{
+      current = toKey;
+      // finalize exact
+      applyInstant(toKey);
+
+      // if arriving RELAX: restore nails
+      if(toKey === 'RELAX'){
+        // nails are set by applyInstant already
+      } else {
+        // ensure nails cleared
+        clearNails();
+      }
+    });
+  }
+
+  // ====== Buttons ======
+  document.getElementById('bRelax').addEventListener('click', ()=>transitionTo('RELAX'));
+  document.getElementById('bHold').addEventListener('click',  ()=>transitionTo('HOLD'));
+  document.getElementById('bLock').addEventListener('click',  ()=>transitionTo('LOCK'));
+  document.getElementById('bMini').addEventListener('click',  ()=>transitionTo('MINI'));
+
+  function setAuto(on){
+    auto = on;
+    const btn = document.getElementById('bAuto');
+    btn.textContent = on ? 'AUTO: ON' : 'AUTO: OFF';
+    if(autoTimer){ clearInterval(autoTimer); autoTimer = null; }
+    if(on){
+      const seq = ['RELAX','HOLD','LOCK','MINI','LOCK','RELAX'];
+      let i = 0;
+      autoTimer = setInterval(()=>{
+        i = (i + 1) % seq.length;
+        transitionTo(seq[i]);
+      }, 1200);
+    }
+  }
+  document.getElementById('bAuto').addEventListener('click', ()=>setAuto(!auto));
+
+  // Initial render
+  applyInstant('RELAX');
+})();
+</script>
+</body>
+</html>
