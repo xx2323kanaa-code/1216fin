@@ -114,11 +114,28 @@ const rot = {
 
 let current="RELAX";
 
+/* ===== 沈み込み（追加：これだけが今回の本体） =====
+   - x: 把持方向へ沈み込む（回旋後に長辺へ届く方向の“食い込み”になる）
+   - y: 掌側へ落ち込む（「短くなる」ではなく「沈む」に見えるための補助）
+*/
+const sink = {
+ RELAX:{dx:0,  dy:0},
+ HOLD: {dx:10, dy:6},
+ LOCK: {dx:22, dy:10},
+ MINI: {dx:16, dy:8}
+};
+
 /* ===== 描画関数 ===== */
-function drawFinger(id,len){
+function drawFinger(id,len,state){
  const f=F[id];
- const x1=f.x,y1=baseY;
- const x2=x1,y2=y1-len;
+ const s=sink[state] || sink.RELAX;
+
+ const x1=f.x - s.dx;          // ←沈み込み（内側へ）
+ const y1=baseY + s.dy;         // ←沈み込み（掌側へ）
+
+ const x2=x1;
+ const y2=y1-len;
+
  const el=document.getElementById(id);
  el.setAttribute("x1",x1);
  el.setAttribute("y1",y1);
@@ -181,13 +198,13 @@ function apply(state){
 
  if(state==="RELAX"){
   for(const k in F){
-   const p=drawFinger(k,F[k].relax);
+   const p=drawFinger(k,F[k].relax,"RELAX");
    nail("n_"+k,p.x,p.y,0);
   }
   drawThumb("RELAX");
  }else{
   for(const k in F){
-   drawFinger(k,F[k][state.toLowerCase()]);
+   drawFinger(k,F[k][state.toLowerCase()],state);
   }
   drawThumb(state);
  }
